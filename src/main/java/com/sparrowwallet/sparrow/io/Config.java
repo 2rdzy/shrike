@@ -39,6 +39,7 @@ public class Config {
     private OptimizationStrategy sendOptimizationStrategy;
     private Currency fiatCurrency;
     private ExchangeSource exchangeSource;
+    private ExchangeSource conversionSource;
     private boolean loadRecentWallets = true;
     private boolean validateDerivationPaths = true;
     private boolean groupByAddress = true;
@@ -237,14 +238,26 @@ public class Config {
         return getExchangeSource() != ExchangeSource.NONE;
     }
 
-    //Every source quotes the SHA256d chain, which is not what this wallet holds. The stored
-    //preference is still written, so it returns as the user set it once a real rate exists.
+    //Neoxa is the only source that quotes this chain's coin. Every other source quotes the SHA256d chain, which
+    //is not what this wallet holds, so a config that names one of them (carried over from before the split, or
+    //from Sparrow) asks for a rate and gets Neoxa's. Only a choice of no rate at all is kept as it was.
     public ExchangeSource getExchangeSource() {
-        return ExchangeSource.NONE;
+        return exchangeSource == ExchangeSource.NONE ? ExchangeSource.NONE : ExchangeSource.NEOXA;
     }
 
     public void setExchangeSource(ExchangeSource exchangeSource) {
         this.exchangeSource = exchangeSource;
+        flush();
+    }
+
+    //The source Neoxa's USD rate is converted to other currencies through. Only the ratio between two of its
+    //currencies is used, never its price of a bitcoin.
+    public ExchangeSource getConversionSource() {
+        return conversionSource != null && ExchangeSource.CONVERSION_SOURCES.contains(conversionSource) ? conversionSource : ExchangeSource.DEFAULT_CONVERSION_SOURCE;
+    }
+
+    public void setConversionSource(ExchangeSource conversionSource) {
+        this.conversionSource = conversionSource;
         flush();
     }
 

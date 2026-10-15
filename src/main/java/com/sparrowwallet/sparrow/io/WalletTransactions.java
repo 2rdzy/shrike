@@ -11,11 +11,11 @@ import com.sparrowwallet.drongo.wallet.WalletModel;
 import com.sparrowwallet.sparrow.AppServices;
 import com.sparrowwallet.sparrow.UnitFormat;
 import com.sparrowwallet.sparrow.net.ExchangeSource;
+import com.sparrowwallet.sparrow.net.HistoricalRates;
 import com.sparrowwallet.sparrow.wallet.Entry;
 import com.sparrowwallet.sparrow.wallet.TransactionEntry;
 import com.sparrowwallet.sparrow.wallet.WalletForm;
 import com.sparrowwallet.sparrow.wallet.WalletTransactionsEntry;
-import org.apache.commons.lang3.time.DateUtils;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -55,17 +55,17 @@ public class WalletTransactions implements WalletExport {
 
         ExchangeSource exchangeSource = Config.get().getExchangeSource();
         if(Config.get().getExchangeSource() == null) {
-            exchangeSource = ExchangeSource.COINGECKO;
+            exchangeSource = ExchangeSource.NEOXA;
         }
 
         Currency fiatCurrency = (exchangeSource == ExchangeSource.NONE || !AppServices.onlineProperty().get() ? null : Config.get().getFiatCurrency());
-        Map<Date, Double> fiatRates = new HashMap<>();
+        HistoricalRates fiatRates = new HistoricalRates(Collections.emptyMap(), Collections.emptyMap(), null);
         if(fiatCurrency != null && !walletTransactionsEntry.getChildren().isEmpty()) {
             LongSummaryStatistics stats = walletTransactionsEntry.getChildren().stream()
                     .map(entry -> ((TransactionEntry)entry).getBlockTransaction().getDate())
                     .filter(Objects::nonNull)
                     .collect(Collectors.summarizingLong(Date::getTime));
-            fiatRates = exchangeSource.getHistoricalExchangeRates(fiatCurrency, new Date(stats.getMin() - ONE_DAY), new Date(stats.getMax()));
+            fiatRates = exchangeSource.getHistoricalRates(fiatCurrency, new Date(stats.getMin() - ONE_DAY), new Date(stats.getMax()));
         }
 
         BitcoinUnit bitcoinUnit = Config.get().getBitcoinUnit();
@@ -146,14 +146,14 @@ public class WalletTransactions implements WalletExport {
         return format.tableFormatCurrencyValue(value);
     }
 
-    private Double getFiatValue(TransactionEntry txEntry, Map<Date, Double> fiatRates) {
+    private Double getFiatValue(TransactionEntry txEntry, HistoricalRates fiatRates) {
         Double dayRate = null;
         if(txEntry.getBlockTransaction().getDate() == null) {
             if(AppServices.getFiatCurrencyExchangeRate() != null) {
                 dayRate = AppServices.getFiatCurrencyExchangeRate().getBtcRate();
             }
         } else {
-            dayRate = fiatRates.get(DateUtils.truncate(txEntry.getBlockTransaction().getDate(), Calendar.DAY_OF_MONTH));
+            dayRate = fiatRates.getRate(txEntry.getBlockTransaction().getHeight(), txEntry.getBlockTransaction().getDate());
         }
 
         if(dayRate != null) {

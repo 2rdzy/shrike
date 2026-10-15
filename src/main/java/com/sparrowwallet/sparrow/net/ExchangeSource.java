@@ -2,9 +2,12 @@ package com.sparrowwallet.sparrow.net;
 
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.sparrow.AppServices;
 import com.sparrowwallet.sparrow.SparrowWallet;
 import com.sparrowwallet.sparrow.event.ExchangeRatesUpdatedEvent;
+import com.sparrowwallet.sparrow.io.Config;
 import com.sparrowwallet.tern.http.client.HttpResponseException;
 import javafx.concurrent.ScheduledService;
 import javafx.concurrent.Service;
@@ -57,6 +60,11 @@ public enum ExchangeSource {
             }
 
             return null;
+        }
+
+        @Override
+        protected Map<Currency, Double> getAllExchangeRates() {
+            return toCurrencyRates(getRates().data.rates);
         }
 
         private CoinbaseRates getRates() {
@@ -143,6 +151,17 @@ public enum ExchangeSource {
             return null;
         }
 
+        @Override
+        protected Map<Currency, Double> getAllExchangeRates() {
+            Map<String, Double> rates = new LinkedHashMap<>();
+            getRates().rates.forEach((code, rate) -> {
+                if("fiat".equals(rate.type)) {
+                    rates.put(code, rate.value);
+                }
+            });
+            return toCurrencyRates(rates);
+        }
+
         private CoinGeckoRates getRates() {
             String url = "https://api.coingecko.com/api/v3/exchange_rates";
 
@@ -216,6 +235,11 @@ public enum ExchangeSource {
             return null;
         }
 
+        @Override
+        protected Map<Currency, Double> getAllExchangeRates() {
+            return toCurrencyRates(getRates().rates);
+        }
+
         private MempoolSpaceRates getRates() {
             String url = AppServices.isUsingProxy() ? "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion/api/v1/prices" : "https://mempool.space/api/v1/prices";
 
@@ -266,7 +290,112 @@ public enum ExchangeSource {
 
             return historicalRates;
         }
+    },
+    NEOXA("Neoxa", "Historical rates from Sep 2026") {
+        //Neoxa quotes this chain's coin against USDC only. Any other currency is reached through the conversion
+        //source, which quotes the SHA256d chain: dividing its price in one currency by its price in USD leaves the
+        //rate between the two currencies, and the SHA256d chain's own price cancels out.
+        @Override
+        public List<Currency> getSupportedCurrencies() {
+            //An empty list says the currencies could not be retrieved, and keeps the one the user chose
+            List<Currency> currencies = new ArrayList<>(getConversionSource().getSupportedCurrencies());
+            if(!currencies.isEmpty() && !currencies.contains(USD)) {
+                currencies.addFirst(USD);
+            }
+
+            return currencies;
+        }
+
+        @Override
+        public Double getExchangeRate(Currency currency) {
+            Double usdRate = getTicker().ticker.lastPrice;
+            if(usdRate == null || USD.equals(currency)) {
+                return usdRate;
+            }
+
+            return convertFromUsd(usdRate, getConversionSource().getAllExchangeRates(), currency);
+        }
+
+        private NeoxaTicker getTicker() {
+            String url = NEOXA_URL + "/api/exchange/ticker/" + NEOXA_PAIR;
+
+            if(log.isInfoEnabled()) {
+                log.info("Requesting exchange rates from " + url);
+            }
+
+            HttpClientService httpClientService = AppServices.getHttpClientService();
+            try {
+                return httpClientService.requestJson(url, NeoxaTicker.class, null);
+            } catch(Exception e) {
+                if(log.isDebugEnabled()) {
+                    log.warn("Error retrieving currency rates", e);
+                } else {
+                    log.warn("Error retrieving currency rates (" + e.getMessage() + ")");
+                }
+                return new NeoxaTicker();
+            }
+        }
+
+        @Override
+        public Map<Date, Double> getHistoricalExchangeRates(Currency currency, Date start, Date end) {
+            Map<Date, Double> usdRates = getUsdHistoricalExchangeRates(start, end);
+            if(USD.equals(currency) || usdRates.isEmpty()) {
+                return usdRates;
+            }
+
+            ExchangeSource conversionSource = getConversionSource();
+            return convertFromUsd(usdRates, conversionSource.getHistoricalExchangeRates(currency, start, end), conversionSource.getHistoricalExchangeRates(USD, start, end));
+        }
+
+        @Override
+        public HistoricalRates getHistoricalRates(Currency currency, Date start, Date end) {
+            Integer splitHeight = HistoricalRates.getSplitHeight(Network.get());
+            ExchangeSource conversionSource = getConversionSource();
+            Map<Date, Double> btcRates = conversionSource.getHistoricalExchangeRates(currency, start, end);
+            Map<Date, Double> usdRates = getUsdHistoricalExchangeRates(start, end);
+            if(!USD.equals(currency) && !usdRates.isEmpty()) {
+                usdRates = convertFromUsd(usdRates, btcRates, conversionSource.getHistoricalExchangeRates(USD, start, end));
+            }
+
+            return new HistoricalRates(splitHeight == null ? Collections.emptyMap() : btcRates, usdRates, splitHeight);
+        }
+
+        private Map<Date, Double> getUsdHistoricalExchangeRates(Date start, Date end) {
+            //The candles endpoint takes a count rather than a range, and returns the most recent ones
+            long days = ChronoUnit.DAYS.between(start.toInstant(), Instant.now()) + 2;
+            String url = NEOXA_URL + "/api/exchange/candles/" + NEOXA_PAIR + "?interval=1d&limit=" + Math.max(1, Math.min(days, 10000));
+
+            if(log.isInfoEnabled()) {
+                log.info("Requesting historical exchange rates from " + url);
+            }
+
+            HttpClientService httpClientService = AppServices.getHttpClientService();
+            try {
+                NeoxaCandles neoxaCandles = httpClientService.requestJson(url, NeoxaCandles.class, null);
+                return toDailyRates(neoxaCandles, start, end);
+            } catch(Exception e) {
+                if(log.isDebugEnabled()) {
+                    log.warn("Error retrieving historical currency rates", e);
+                } else {
+                    log.warn("Error retrieving historical currency rates (" + e.getMessage() + ")");
+                }
+            }
+
+            return Collections.emptyMap();
+        }
+
+        @Override
+        public ExchangeSource getConversionSource() {
+            return Config.get().getConversionSource();
+        }
     };
+
+    public static final ExchangeSource DEFAULT_CONVERSION_SOURCE = MEMPOOL_SPACE;
+    public static final List<ExchangeSource> CONVERSION_SOURCES = List.of(COINBASE, COINGECKO, MEMPOOL_SPACE);
+
+    private static final Currency USD = Currency.getInstance("USD");
+    private static final String NEOXA_URL = "https://neoxa.exchange";
+    private static final String NEOXA_PAIR = "BTCB2_USDC";
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeSource.class);
     private static final Map<String, String> HTTP_HEADERS = Map.of("User-Agent", "Mozilla/4.0 (compatible; MSIE 9.0; Windows NT 6.1)", "Accept", "*/*");
@@ -284,6 +413,77 @@ public enum ExchangeSource {
     public abstract Double getExchangeRate(Currency currency);
 
     public abstract Map<Date, Double> getHistoricalExchangeRates(Currency currency, Date start, Date end);
+
+    /**
+     * Daily rates for valuing past transactions. Only a source that follows this chain tells a coin made before the
+     * split from one made after it, so every other source values them all the same way.
+     */
+    public HistoricalRates getHistoricalRates(Currency currency, Date start, Date end) {
+        return new HistoricalRates(Collections.emptyMap(), getHistoricalExchangeRates(currency, start, end), null);
+    }
+
+    /**
+     * The price of a bitcoin in every currency this source quotes, from a single response so that all of them are
+     * taken at the same moment.
+     */
+    protected Map<Currency, Double> getAllExchangeRates() {
+        return Collections.emptyMap();
+    }
+
+    /**
+     * The source used to turn a USD rate into another currency, or null where the rate is quoted directly.
+     */
+    public ExchangeSource getConversionSource() {
+        return null;
+    }
+
+    static Map<Currency, Double> toCurrencyRates(Map<String, Double> rates) {
+        Map<Currency, Double> currencyRates = new LinkedHashMap<>();
+        rates.forEach((code, rate) -> {
+            String upperCode = code.toUpperCase(Locale.ROOT);
+            if(rate != null && isValidISO4217Code(upperCode)) {
+                currencyRates.put(Currency.getInstance(upperCode), rate);
+            }
+        });
+
+        return currencyRates;
+    }
+
+    static Double convertFromUsd(Double usdRate, Map<Currency, Double> btcRates, Currency currency) {
+        Double btcUsd = btcRates.get(USD);
+        Double btcCurrency = btcRates.get(currency);
+        if(usdRate == null || btcUsd == null || btcCurrency == null || btcUsd <= 0.0 || btcCurrency <= 0.0) {
+            return null;
+        }
+
+        return usdRate * btcCurrency / btcUsd;
+    }
+
+    static Map<Date, Double> convertFromUsd(Map<Date, Double> usdRates, Map<Date, Double> btcCurrencyRates, Map<Date, Double> btcUsdRates) {
+        Map<Date, Double> rates = new TreeMap<>();
+        usdRates.forEach((date, usdRate) -> {
+            Double btcCurrency = btcCurrencyRates.get(date);
+            Double btcUsd = btcUsdRates.get(date);
+            //mempool.space marks a day it has no rate for with -1
+            if(usdRate != null && btcCurrency != null && btcUsd != null && btcUsd > 0.0 && btcCurrency > 0.0) {
+                rates.put(date, usdRate * btcCurrency / btcUsd);
+            }
+        });
+
+        return rates;
+    }
+
+    static Map<Date, Double> toDailyRates(NeoxaCandles neoxaCandles, Date start, Date end) {
+        Map<Date, Double> rates = new TreeMap<>();
+        for(NeoxaCandle candle : neoxaCandles.candles) {
+            Date date = new Date(candle.time * 1000);
+            if(candle.close != null && !date.before(DateUtils.truncate(start, Calendar.DAY_OF_MONTH)) && !date.after(end)) {
+                rates.put(DateUtils.truncate(date, Calendar.DAY_OF_MONTH), candle.close);
+            }
+        }
+
+        return rates;
+    }
 
     private static boolean isValidISO4217Code(String code) {
         try {
@@ -402,5 +602,26 @@ public enum ExchangeSource {
 
     private static class MempoolSpaceHistoricalRates {
         public List<MempoolSpaceRates> prices = new ArrayList<>();
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class NeoxaTicker {
+        public NeoxaTickerData ticker = new NeoxaTickerData();
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class NeoxaTickerData {
+        public Double lastPrice;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class NeoxaCandles {
+        public List<NeoxaCandle> candles = new ArrayList<>();
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    static class NeoxaCandle {
+        public long time;
+        public Double close;
     }
 }
