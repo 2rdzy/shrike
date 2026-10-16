@@ -50,9 +50,6 @@ public class GeneralSettingsController extends SettingsDetailController {
     private ComboBox<ExchangeSource> exchangeSource;
 
     @FXML
-    private ComboBox<ExchangeSource> conversionSource;
-
-    @FXML
     private Label currenciesLoadWarning;
 
     @FXML
@@ -152,18 +149,7 @@ public class GeneralSettingsController extends SettingsDetailController {
 
         exchangeSource.valueProperty().addListener((observable, oldValue, source) -> {
             config.setExchangeSource(source);
-            conversionSource.setDisable(source == ExchangeSource.NONE);
             updateCurrencies(source);
-        });
-
-        conversionSource.setValue(config.getConversionSource());
-        conversionSource.setDisable(config.getExchangeSource() == ExchangeSource.NONE);
-        conversionSource.setButtonCell(new ExchangeSourceButtonCell());
-        conversionSource.setCellFactory(_ -> new ExchangeSourceButtonCell());
-
-        conversionSource.valueProperty().addListener((observable, oldValue, source) -> {
-            config.setConversionSource(source);
-            updateCurrencies(exchangeSource.getValue());
         });
 
         updateCurrencies(exchangeSource.getSelectionModel().getSelectedItem());

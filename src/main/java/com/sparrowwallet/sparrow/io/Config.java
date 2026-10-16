@@ -39,7 +39,6 @@ public class Config {
     private OptimizationStrategy sendOptimizationStrategy;
     private Currency fiatCurrency;
     private ExchangeSource exchangeSource;
-    private ExchangeSource conversionSource;
     private boolean loadRecentWallets = true;
     private boolean validateDerivationPaths = true;
     private boolean groupByAddress = true;
@@ -238,26 +237,15 @@ public class Config {
         return getExchangeSource() != ExchangeSource.NONE;
     }
 
-    //Neoxa is the only source that quotes this chain's coin. Every other source quotes the SHA256d chain, which
-    //is not what this wallet holds, so a config that names one of them (carried over from before the split, or
-    //from Sparrow) asks for a rate and gets Neoxa's. Only a choice of no rate at all is kept as it was.
+    //Neoxa is the only source that quotes this chain's coin, and is opt-in. Every other source quotes the SHA256d
+    //chain, which is not what this wallet holds, so a config that names one of them (carried over from before the
+    //split, or from Sparrow) shows no fiat value rather than the wrong one.
     public ExchangeSource getExchangeSource() {
-        return exchangeSource == ExchangeSource.NONE ? ExchangeSource.NONE : ExchangeSource.NEOXA;
+        return exchangeSource == ExchangeSource.NEOXA ? ExchangeSource.NEOXA : ExchangeSource.NONE;
     }
 
     public void setExchangeSource(ExchangeSource exchangeSource) {
         this.exchangeSource = exchangeSource;
-        flush();
-    }
-
-    //The source Neoxa's USD rate is converted to other currencies through. Only the ratio between two of its
-    //currencies is used, never its price of a bitcoin.
-    public ExchangeSource getConversionSource() {
-        return conversionSource != null && ExchangeSource.CONVERSION_SOURCES.contains(conversionSource) ? conversionSource : ExchangeSource.DEFAULT_CONVERSION_SOURCE;
-    }
-
-    public void setConversionSource(ExchangeSource conversionSource) {
-        this.conversionSource = conversionSource;
         flush();
     }
 

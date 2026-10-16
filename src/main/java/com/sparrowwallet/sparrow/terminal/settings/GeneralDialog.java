@@ -27,7 +27,6 @@ public class GeneralDialog extends DialogWindow {
 
     private final ComboBox<Currency> fiatCurrency;
     private final ComboBox<ExchangeSource> exchangeSource;
-    private final ComboBox<ExchangeSource> conversionSource;
 
     private final ComboBox.Listener fiatCurrencyListener = new ComboBox.Listener() {
         @Override
@@ -69,19 +68,13 @@ public class GeneralDialog extends DialogWindow {
         exchangeSource = new ComboBox<>(ExchangeSource.NONE, ExchangeSource.NEOXA);
         mainPanel.addComponent(exchangeSource);
 
-        mainPanel.addComponent(new Label("Currency conversion"));
-        conversionSource = new ComboBox<>(ExchangeSource.CONVERSION_SOURCES);
-        mainPanel.addComponent(conversionSource);
-
         bitcoinUnit.setSelectedItem(Config.get().getBitcoinUnit() == null ? BitcoinUnit.AUTO : Config.get().getBitcoinUnit());
         unitFormat.setSelectedIndex(Config.get().getUnitFormat() == UnitFormat.COMMA ? 1 : 0);
 
         if(Config.get().getExchangeSource() == null) {
-            Config.get().setExchangeSource(ExchangeSource.NEOXA);
+            Config.get().setExchangeSource(ExchangeSource.NONE);
         }
         exchangeSource.setSelectedItem(Config.get().getExchangeSource());
-        conversionSource.setSelectedItem(Config.get().getConversionSource());
-        conversionSource.setEnabled(Config.get().getExchangeSource() != ExchangeSource.NONE);
 
         bitcoinUnit.addListener((int selectedIndex, int previousSelection, boolean changedByUserInteraction) -> {
             BitcoinUnit newValue = bitcoinUnit.getSelectedItem();
@@ -102,13 +95,7 @@ public class GeneralDialog extends DialogWindow {
         exchangeSource.addListener((int selectedIndex, int previousSelection, boolean changedByUserInteraction) -> {
             ExchangeSource source = exchangeSource.getSelectedItem();
             Config.get().setExchangeSource(source);
-            conversionSource.setEnabled(source != ExchangeSource.NONE);
             updateCurrencies(source);
-        });
-
-        conversionSource.addListener((int selectedIndex, int previousSelection, boolean changedByUserInteraction) -> {
-            Config.get().setConversionSource(conversionSource.getSelectedItem());
-            updateCurrencies(exchangeSource.getSelectedItem());
         });
 
         updateCurrencies(exchangeSource.getSelectedItem());

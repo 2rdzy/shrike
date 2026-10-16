@@ -15,8 +15,8 @@ import com.sparrowwallet.sparrow.event.KeystoreLabelsChangedEvent;
 import com.sparrowwallet.sparrow.event.WalletEntryLabelsChangedEvent;
 import com.sparrowwallet.sparrow.event.WalletUtxoStatusChangedEvent;
 import com.sparrowwallet.sparrow.net.ExchangeSource;
-import com.sparrowwallet.sparrow.net.HistoricalRates;
 import com.sparrowwallet.sparrow.wallet.*;
+import org.apache.commons.lang3.time.DateUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -61,7 +61,7 @@ public class WalletLabels implements WalletImport, WalletExport {
     @Override
     public void exportWallet(Wallet wallet, OutputStream outputStream, String password) throws ExportException {
         List<Label> labels = new ArrayList<>();
-        HistoricalRates fiatRates = getFiatRates(walletForms);
+        Map<Date, Double> fiatRates = getFiatRates(walletForms);
         for(WalletForm exportWalletForm : walletForms) {
             Wallet exportWallet = exportWalletForm.getWallet();
             OutputDescriptor outputDescriptor = OutputDescriptor.getOutputDescriptor(exportWallet);
@@ -85,7 +85,7 @@ public class WalletLabels implements WalletImport, WalletExport {
                 labels.add(new TransactionLabel(blkTx.getHashAsString(), blkTx.getLabel(), origin,
                         txEntry.isConfirming() ? null : blkTx.getHeight(), blkTx.getDate(),
                         getFee(walletTransactionsEntry.getWallet(), blkTx), txEntry.getValue(),
-                        getFiatValue(blkTx.getHeight(), blkTx.getDate(), Transaction.SATOSHIS_PER_BITCOIN, fiatRates)));
+                        getFiatValue(blkTx.getDate(), Transaction.SATOSHIS_PER_BITCOIN, fiatRates)));
                 if(txEntry.isConfirming()) {
                     confirmingTxs.add(blkTx.getHash());
                 }
@@ -392,10 +392,10 @@ public class WalletLabels implements WalletImport, WalletExport {
         return fee;
     }
 
-    private HistoricalRates getFiatRates(List<WalletForm> walletForms) {
+    private Map<Date, Double> getFiatRates(List<WalletForm> walletForms) {
         ExchangeSource exchangeSource = getExchangeSource();
         Currency fiatCurrency = getFiatCurrency();
-        HistoricalRates fiatRates = new HistoricalRates(Collections.emptyMap(), Collections.emptyMap(), null);
+        Map<Date, Double> fiatRates = new HashMap<>();
         if(fiatCurrency != null) {
             long min = Long.MAX_VALUE;
             long max = Long.MIN_VALUE;
@@ -413,7 +413,7 @@ public class WalletLabels implements WalletImport, WalletExport {
             }
 
             if(max > min) {
-                fiatRates = exchangeSource.getHistoricalRates(fiatCurrency, new Date(min - ONE_DAY), new Date(max));
+                fiatRates = exchangeSource.getHistoricalExchangeRates(fiatCurrency, new Date(min - ONE_DAY), new Date(max));
             }
         }
 
@@ -421,22 +421,22 @@ public class WalletLabels implements WalletImport, WalletExport {
     }
 
     private static ExchangeSource getExchangeSource() {
-        return Config.get().getExchangeSource() == null ? ExchangeSource.NEOXA : Config.get().getExchangeSource();
+        return Config.get().getExchangeSource() == null ? ExchangeSource.COINGECKO : Config.get().getExchangeSource();
     }
 
     private static Currency getFiatCurrency() {
         return getExchangeSource() == ExchangeSource.NONE || !AppServices.onlineProperty().get() ? null : Config.get().getFiatCurrency();
     }
 
-    private Map<Currency, BigDecimal> getFiatValue(TransactionEntry txEntry, HistoricalRates fiatRates) {
-        return getFiatValue(txEntry.getBlockTransaction().getHeight(), txEntry.getBlockTransaction().getDate(), txEntry.getValue(), fiatRates);
+    private Map<Currency, BigDecimal> getFiatValue(TransactionEntry txEntry, Map<Date, Double> fiatRates) {
+        return getFiatValue(txEntry.getBlockTransaction().getDate(), txEntry.getValue(), fiatRates);
     }
 
-    private Map<Currency, BigDecimal> getFiatValue(BlockTransactionHashIndex ref, HistoricalRates fiatRates) {
-        return getFiatValue(ref.getHeight(), ref.getDate(), ref.getValue(), fiatRates);
+    private Map<Currency, BigDecimal> getFiatValue(BlockTransactionHashIndex ref, Map<Date, Double> fiatRates) {
+        return getFiatValue(ref.getDate(), ref.getValue(), fiatRates);
     }
 
-    private Map<Currency, BigDecimal> getFiatValue(int height, Date date, long value, HistoricalRates fiatRates) {
+    private Map<Currency, BigDecimal> getFiatValue(Date date, long value, Map<Date, Double> fiatRates) {
         Currency fiatCurrency = getFiatCurrency();
         if(fiatCurrency != null) {
             Double dayRate = null;
@@ -445,7 +445,7 @@ public class WalletLabels implements WalletImport, WalletExport {
                     dayRate = AppServices.getFiatCurrencyExchangeRate().getBtcRate();
                 }
             } else {
-                dayRate = fiatRates.getRate(height, date);
+                dayRate = fiatRates.get(DateUtils.truncate(date, Calendar.DAY_OF_MONTH));
             }
 
             if(dayRate != null) {

@@ -8,12 +8,11 @@ import org.junit.jupiter.api.Test;
 import java.util.Calendar;
 import java.util.Currency;
 import java.util.Date;
-import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * Neoxa quotes this chain's coin in USD only. Other currencies come from the conversion source, using only the ratio
- * between its price of a bitcoin in that currency and in USD, so its price of a bitcoin cancels out.
+ * Neoxa quotes this chain's coin against USDC only, so USD is the one currency it offers.
  */
 public class NeoxaExchangeSourceTest {
     private static final Currency USD = Currency.getInstance("USD");
@@ -26,6 +25,15 @@ public class NeoxaExchangeSourceTest {
             "{\"time\":1788220800,\"open\":13.515415,\"high\":220,\"low\":13.515415,\"close\":90,\"volume\":442.69}," +
             "{\"time\":1788307200,\"open\":87,\"high\":299.6,\"low\":80,\"close\":250.5,\"volume\":100.1}," +
             "{\"time\":1788393600,\"open\":250.5,\"high\":300,\"low\":240,\"close\":280,\"volume\":50.2}]}";
+
+    @Test
+    public void testOnlyUsdIsOffered() {
+        Assertions.assertEquals(List.of(USD), ExchangeSource.NEOXA.getSupportedCurrencies());
+
+        //Answered without a request, since there is nothing to ask for
+        Assertions.assertNull(ExchangeSource.NEOXA.getExchangeRate(EUR));
+        Assertions.assertTrue(ExchangeSource.NEOXA.getHistoricalExchangeRates(EUR, new Date(0), new Date()).isEmpty());
+    }
 
     @Test
     public void testTickerParses() throws Exception {
@@ -45,55 +53,6 @@ public class NeoxaExchangeSourceTest {
         Assertions.assertEquals(280.0, rates.get(DateUtils.truncate(end, Calendar.DAY_OF_MONTH)));
 
         //Candles outside the requested range are left out
-        Map<Date, Double> lastDay = ExchangeSource.toDailyRates(candles, end, end);
-        Assertions.assertEquals(1, lastDay.size());
-    }
-
-    @Test
-    public void testConversionUsesOnlyTheRatio() {
-        Map<Currency, Double> btcRates = Map.of(USD, 80000.0, EUR, 72000.0);
-        Assertions.assertEquals(663.318, ExchangeSource.convertFromUsd(737.02, btcRates, EUR), 0.0001);
-
-        //Doubling the SHA256d chain's price in every currency changes nothing
-        Map<Currency, Double> doubled = Map.of(USD, 160000.0, EUR, 144000.0);
-        Assertions.assertEquals(ExchangeSource.convertFromUsd(737.02, btcRates, EUR), ExchangeSource.convertFromUsd(737.02, doubled, EUR), 0.0001);
-    }
-
-    @Test
-    public void testConversionNeedsBothCurrencies() {
-        Assertions.assertNull(ExchangeSource.convertFromUsd(737.02, Map.of(EUR, 72000.0), EUR));
-        Assertions.assertNull(ExchangeSource.convertFromUsd(737.02, Map.of(USD, 80000.0), EUR));
-        Assertions.assertNull(ExchangeSource.convertFromUsd(737.02, Map.of(USD, 0.0, EUR, 72000.0), EUR));
-        Assertions.assertNull(ExchangeSource.convertFromUsd(null, Map.of(USD, 80000.0, EUR, 72000.0), EUR));
-        Assertions.assertNull(ExchangeSource.convertFromUsd(737.02, Map.of(USD, 80000.0, EUR, -1.0), EUR));
-    }
-
-    @Test
-    public void testHistoricalConversionSkipsDaysWithoutBothRates() {
-        Date day1 = new Date(1788220800L * 1000);
-        Date day2 = new Date(1788307200L * 1000);
-        Map<Date, Double> usdRates = new LinkedHashMap<>();
-        usdRates.put(day1, 100.0);
-        usdRates.put(day2, 200.0);
-
-        Map<Date, Double> converted = ExchangeSource.convertFromUsd(usdRates, Map.of(day1, 90000.0, day2, 45000.0), Map.of(day1, 100000.0));
-        Assertions.assertEquals(1, converted.size());
-        Assertions.assertEquals(90.0, converted.get(day1), 0.0001);
-
-        //mempool.space marks a day it has no rate for with -1
-        Map<Date, Double> unknown = ExchangeSource.convertFromUsd(usdRates, Map.of(day1, -1.0, day2, -1.0), Map.of(day1, 100000.0, day2, 100000.0));
-        Assertions.assertTrue(unknown.isEmpty());
-    }
-
-    @Test
-    public void testCurrencyCodesAreValidated() {
-        Map<String, Double> rates = new LinkedHashMap<>();
-        rates.put("usd", 80000.0);
-        rates.put("EUR", 72000.0);
-        rates.put("xyz", 1.0);
-        rates.put("time", 1788220800.0);
-
-        Map<Currency, Double> currencyRates = ExchangeSource.toCurrencyRates(rates);
-        Assertions.assertEquals(Map.of(USD, 80000.0, EUR, 72000.0), currencyRates);
+        Assertions.assertEquals(1, ExchangeSource.toDailyRates(candles, end, end).size());
     }
 }
