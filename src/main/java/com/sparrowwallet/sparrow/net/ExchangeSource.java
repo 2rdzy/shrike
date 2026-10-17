@@ -20,7 +20,9 @@ import java.net.URL;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -289,7 +291,7 @@ public enum ExchangeSource {
 
             HttpClientService httpClientService = AppServices.getHttpClientService();
             try {
-                return httpClientService.requestJson(url, NeoxaTicker.class, null).ticker.lastPrice;
+                return toValidRate(httpClientService.requestJson(url, NeoxaTicker.class, null).ticker.lastPrice);
             } catch(Exception e) {
                 if(log.isDebugEnabled()) {
                     log.warn("Error retrieving currency rates", e);
@@ -306,9 +308,7 @@ public enum ExchangeSource {
                 return Collections.emptyMap();
             }
 
-            //The candles endpoint takes a count rather than a range, and returns the most recent ones
-            long days = ChronoUnit.DAYS.between(start.toInstant(), Instant.now()) + 2;
-            String url = NEOXA_URL + "/api/exchange/candles/" + NEOXA_PAIR + "?interval=1d&limit=" + Math.max(1, Math.min(days, 10000));
+            String url = NEOXA_URL + "/api/exchange/candles/" + NEOXA_PAIR + "?interval=1d&limit=" + getCandlesLimit(Instant.now());
 
             if(log.isInfoEnabled()) {
                 log.info("Requesting historical exchange rates from " + url);
@@ -332,6 +332,7 @@ public enum ExchangeSource {
     private static final Currency USD = Currency.getInstance("USD");
     private static final String NEOXA_URL = "https://neoxa.exchange";
     private static final String NEOXA_PAIR = "BTCB2_USDC";
+    private static final Instant NEOXA_DATA_START = Instant.parse("2026-09-01T00:00:00Z");
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeSource.class);
     private static final Map<String, String> HTTP_HEADERS = Map.of("User-Agent", "Mozilla/4.0 (compatible; MSIE 9.0; Windows NT 6.1)", "Accept", "*/*");
@@ -350,16 +351,36 @@ public enum ExchangeSource {
 
     public abstract Map<Date, Double> getHistoricalExchangeRates(Currency currency, Date start, Date end);
 
+    //The candles endpoint takes a count of the most recent candles rather than a range. A count worked out from the
+    //export's start date would tell Neoxa when the wallet's first transaction was, so every request asks for all of
+    //Neoxa's data, counted from the day it starts: whole days since then, plus today's candle, plus one spare.
+    static long getCandlesLimit(Instant now) {
+        return ChronoUnit.DAYS.between(NEOXA_DATA_START, now) + 2;
+    }
+
+    //Each candle opens at UTC midnight and covers that UTC day. Its close is keyed by that UTC date, at local midnight
+    //so it matches a transaction's date truncated in local time; truncating the candle's own instant would move every
+    //close a day earlier west of UTC.
     static Map<Date, Double> toDailyRates(NeoxaCandles neoxaCandles, Date start, Date end) {
+        ZoneId zone = ZoneId.systemDefault();
+        LocalDate startDate = start.toInstant().atZone(zone).toLocalDate();
+        LocalDate endDate = end.toInstant().atZone(zone).toLocalDate();
+
         Map<Date, Double> rates = new TreeMap<>();
         for(NeoxaCandle candle : neoxaCandles.candles) {
-            Date date = new Date(candle.time * 1000);
-            if(candle.close != null && !date.before(DateUtils.truncate(start, Calendar.DAY_OF_MONTH)) && !date.after(end)) {
-                rates.put(DateUtils.truncate(date, Calendar.DAY_OF_MONTH), candle.close);
+            LocalDate day = Instant.ofEpochSecond(candle.time).atZone(ZoneOffset.UTC).toLocalDate();
+            Double close = toValidRate(candle.close);
+            if(close != null && !day.isBefore(startDate) && !day.isAfter(endDate)) {
+                rates.put(Date.from(day.atStartOfDay(zone).toInstant()), close);
             }
         }
 
         return rates;
+    }
+
+    //An infinite price breaks rendering, and a zero or negative one corrupts exports
+    static Double toValidRate(Double rate) {
+        return rate != null && Double.isFinite(rate) && rate > 0.0 ? rate : null;
     }
 
     private static boolean isValidISO4217Code(String code) {
